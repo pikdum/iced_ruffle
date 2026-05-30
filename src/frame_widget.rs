@@ -14,7 +14,7 @@ use std::sync::Arc;
 use iced::advanced::graphics::Viewport;
 use iced::wgpu;
 use iced::widget::shader::{self, Primitive};
-use iced::{mouse, Rectangle};
+use iced::Rectangle;
 
 /// A decoded RGBA8 frame (straight alpha, tightly packed `width * 4` rows).
 pub struct FrameData {
@@ -23,36 +23,26 @@ pub struct FrameData {
     pub data: Vec<u8>,
 }
 
-/// Handed to the `shader` widget each `view()`. `version` is a content hash, so
-/// identical frames don't trigger a GPU upload.
-pub struct FrameProgram {
-    pub version: u64,
-    pub frame: Arc<FrameData>,
-}
-
-impl<Message> shader::Program<Message> for FrameProgram {
-    type State = ();
-    type Primitive = FramePrimitive;
-
-    fn draw(&self, _state: &(), _cursor: mouse::Cursor, _bounds: Rectangle) -> FramePrimitive {
-        FramePrimitive {
-            version: self.version,
-            frame: self.frame.clone(),
-        }
-    }
-}
-
+/// The per-frame primitive the widget emits. `version` is a content hash, so
+/// identical frames don't trigger a GPU upload. `frame` is `None` before the
+/// first frame has been rendered (the primitive then draws nothing).
 #[derive(Clone)]
 pub struct FramePrimitive {
     version: u64,
-    frame: Arc<FrameData>,
+    frame: Option<Arc<FrameData>>,
+}
+
+impl FramePrimitive {
+    pub fn new(version: u64, frame: Option<Arc<FrameData>>) -> Self {
+        Self { version, frame }
+    }
 }
 
 impl std::fmt::Debug for FramePrimitive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FramePrimitive")
             .field("version", &self.version)
-            .field("size", &(self.frame.width, self.frame.height))
+            .field("has_frame", &self.frame.is_some())
             .finish()
     }
 }
@@ -68,10 +58,13 @@ impl Primitive for FramePrimitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
+        let Some(frame) = &self.frame else {
+            return;
+        };
         let scale = viewport.scale_factor();
         let area_w = (bounds.width * scale).max(1.0);
         let area_h = (bounds.height * scale).max(1.0);
-        pipeline.prepare(device, queue, self.version, &self.frame, area_w, area_h);
+        pipeline.prepare(device, queue, self.version, frame, area_w, area_h);
     }
 
     fn render(

@@ -1993,23 +1993,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced-ruffle-test"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "cpal",
- "iced",
- "image",
- "rfd",
- "ruffle_core",
- "ruffle_render_wgpu",
- "ruffle_video_software",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "iced_core"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2093,6 +2076,23 @@ dependencies = [
  "iced_wgpu",
  "log",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "iced_ruffle"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "cpal",
+ "iced",
+ "image",
+ "rfd",
+ "ruffle_core",
+ "ruffle_render_wgpu",
+ "ruffle_video_software",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

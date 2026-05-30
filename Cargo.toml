@@ -1,10 +1,16 @@
 [package]
-name = "iced-ruffle-test"
+name = "iced_ruffle"
 version = "0.1.0"
 edition = "2021"
+description = "An iced widget that plays Flash (.swf) movies via Ruffle"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "iced_ruffle"
+path = "src/lib.rs"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio", "wgpu", "advanced"] }
+iced = { version = "0.14", features = ["wgpu", "advanced"] }
 image = { version = "0.25", default-features = false }
 
 ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = [
@@ -17,11 +23,17 @@ ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "ma
 ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
 
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Native open-file dialog.
-rfd = "0.17"
 # Real audio output (matches Ruffle's pinned cpal).
 cpal = "0.16"
 bytemuck = "1"
 thiserror = "2"
+
+[dev-dependencies]
+# The example app needs an async executor (for the file dialog) and a file picker.
+iced = { version = "0.14", features = ["tokio"] }
+rfd = "0.17"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "player"
+path = "examples/player.rs"
