@@ -45,6 +45,12 @@ in
   # Must be on the loader path or `cargo run` panics with NoWaylandLib etc.
   env.LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
 
+  # `devenv test` (used by CI) runs the git hooks plus this script. The unit
+  # tests are pure logic — no GPU/display — so they run fine headlessly.
+  enterTest = ''
+    cargo test
+  '';
+
   git-hooks.hooks = {
     clippy = {
       enable = true;
