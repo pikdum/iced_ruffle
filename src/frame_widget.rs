@@ -105,6 +105,14 @@ pub struct FramePipeline {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     layout: wgpu::BindGroupLayout,
+    /// Format for the uploaded frame texture. Ruffle's `capture_frame` returns
+    /// sRGB-encoded bytes and wants no GPU color conversion, so we match the
+    /// sRGB-ness of iced's render target: when the target is sRGB we use an
+    /// sRGB texture (sample decodes, target re-encodes → identity); when it's a
+    /// non-sRGB / 10-bit target we use a plain `Unorm` texture so the bytes pass
+    /// straight through. Mismatching these is what tints the output (linear
+    /// values shown as sRGB look too dark/oversaturated).
+    tex_format: wgpu::TextureFormat,
     target: Option<Target>,
 }
 
@@ -196,10 +204,18 @@ impl shader::Pipeline for FramePipeline {
             ..Default::default()
         });
 
+        // Match the target's color space (see `tex_format` docs).
+        let tex_format = if format.is_srgb() {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+
         FramePipeline {
             pipeline,
             sampler,
             layout,
+            tex_format,
             target: None,
         }
     }
@@ -231,7 +247,7 @@ impl FramePipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: self.tex_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
