@@ -136,3 +136,67 @@ pub fn to_key_descriptor(
         key_location,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TARGET: (u32, u32) = (100, 100);
+
+    fn approx(a: (f64, f64), b: (f64, f64)) {
+        assert!(
+            (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6,
+            "{a:?} != {b:?}"
+        );
+    }
+
+    #[test]
+    fn maps_center_to_target_center() {
+        // Widget matches the target exactly: 1:1, no letterbox.
+        let area = Size::new(100.0, 100.0);
+        approx(
+            map_cursor(area, TARGET, Point::new(50.0, 50.0)),
+            (50.0, 50.0),
+        );
+        approx(map_cursor(area, TARGET, Point::new(0.0, 0.0)), (0.0, 0.0));
+    }
+
+    #[test]
+    fn divides_out_uniform_scale() {
+        // Widget is 2x the target on both axes: positions scale back down.
+        let area = Size::new(200.0, 200.0);
+        approx(
+            map_cursor(area, TARGET, Point::new(100.0, 100.0)),
+            (50.0, 50.0),
+        );
+    }
+
+    #[test]
+    fn accounts_for_letterbox_offset() {
+        // Wide widget: target is centered horizontally with bars on the sides.
+        // scale = 1, horizontal offset = (200 - 100) / 2 = 50.
+        let area = Size::new(200.0, 100.0);
+        // Widget center -> target center.
+        approx(
+            map_cursor(area, TARGET, Point::new(100.0, 50.0)),
+            (50.0, 50.0),
+        );
+        // Left edge of the content area -> target x = 0.
+        approx(map_cursor(area, TARGET, Point::new(50.0, 0.0)), (0.0, 0.0));
+    }
+
+    #[test]
+    fn clamps_into_the_letterbox_bars() {
+        let area = Size::new(200.0, 100.0);
+        // A point inside the left bar (x < 50) clamps to the target's left edge.
+        approx(
+            map_cursor(area, TARGET, Point::new(10.0, 50.0)),
+            (0.0, 50.0),
+        );
+        // Far beyond the bottom-right clamps to the target's max corner.
+        approx(
+            map_cursor(area, TARGET, Point::new(9999.0, 9999.0)),
+            (100.0, 100.0),
+        );
+    }
+}

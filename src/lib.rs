@@ -32,6 +32,7 @@
 mod audio;
 mod frame_widget;
 mod input;
+mod ui;
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
@@ -44,6 +45,7 @@ use std::time::{Duration, Instant};
 use iced::widget::shader::{self, Action};
 use iced::{keyboard, mouse, window, Element, Event, Length, Rectangle};
 
+use ruffle_core::backend::ui::MouseCursor;
 use ruffle_core::events::{MouseButton, MouseWheelDelta, PlayerEvent};
 use ruffle_core::{FloatDuration, Player, PlayerBuilder, ViewportDimensions};
 use ruffle_render_wgpu::backend::WgpuRenderBackend;
@@ -76,6 +78,10 @@ pub struct RufflePlayer {
     /// primitive's `prepare` (the only place that knows the real pixel size and
     /// HiDPI scale) and read by `advance` to size the offscreen render target.
     viewport: Arc<Mutex<(f32, f32, f32)>>,
+    /// The cursor the movie currently wants (a hand over buttons/links, an
+    /// I-beam over text, etc.). Written by our `UiBackend` as the player
+    /// processes input; read by the widget's `mouse_interaction`.
+    cursor: ui::CursorState,
 }
 
 struct Shared {
@@ -115,6 +121,11 @@ impl RufflePlayer {
     /// positions must be mapped into *this* space, not the native stage size.
     fn render_size(&self) -> (u32, u32) {
         self.shared.lock().unwrap().render
+    }
+
+    /// The cursor the movie currently wants under the pointer.
+    fn cursor(&self) -> MouseCursor {
+        *self.cursor.lock().unwrap()
     }
 
     /// Whether playback is paused.
@@ -196,24 +207,10 @@ impl RufflePlayer {
         }
     }
 
-    /// Size of the offscreen render target for the current on-screen size:
-    /// the stage scaled (preserving aspect ratio) to fit the widget's physical
-    /// pixels. Keeping the stage's aspect ratio means the existing shader-side
-    /// letterbox and stage-space cursor mapping stay valid — only the raster
-    /// gets sharper. Falls back to the native stage size before the widget has
-    /// reported a size, and caps each axis so a stray huge size can't allocate
-    /// (and read back) an enormous texture.
+    /// Size of the offscreen render target for the current on-screen size (see
+    /// [`fit_render_size`]).
     fn target_render_size(&self, view_w: f32, view_h: f32, scale: f32) -> (u32, u32) {
-        const MAX_DIM: f32 = 4096.0;
-        let (sw, sh) = (self.stage_w as f32, self.stage_h as f32);
-        let (pw, ph) = (view_w * scale, view_h * scale);
-        if pw < 1.0 || ph < 1.0 || sw < 1.0 || sh < 1.0 {
-            return (self.stage_w.max(1), self.stage_h.max(1));
-        }
-        let fit = (pw / sw).min(ph / sh);
-        let w = (sw * fit).round().clamp(1.0, MAX_DIM) as u32;
-        let h = (sh * fit).round().clamp(1.0, MAX_DIM) as u32;
-        (w, h)
+        fit_render_size((self.stage_w, self.stage_h), view_w, view_h, scale)
     }
 
     /// The current frame and its content hash (the texture "version").
@@ -228,6 +225,36 @@ impl RufflePlayer {
     }
 }
 
+/// The offscreen render-target size for a stage shown at a given on-screen size:
+/// the stage scaled (preserving aspect ratio) to fit the widget's physical
+/// pixels (`view_* * scale`). Keeping the stage's aspect ratio means the
+/// shader-side letterbox and render-space cursor mapping stay valid — only the
+/// raster gets sharper. Falls back to the native stage size before the widget
+/// has reported a size, and caps each axis so a stray huge size can't allocate
+/// (and read back) an enormous texture.
+fn fit_render_size(stage: (u32, u32), view_w: f32, view_h: f32, scale: f32) -> (u32, u32) {
+    const MAX_DIM: f32 = 4096.0;
+    let (sw, sh) = (stage.0 as f32, stage.1 as f32);
+    let (pw, ph) = (view_w * scale, view_h * scale);
+    if pw < 1.0 || ph < 1.0 || sw < 1.0 || sh < 1.0 {
+        return (stage.0.max(1), stage.1.max(1));
+    }
+    let fit = (pw / sw).min(ph / sh);
+    let w = (sw * fit).round().clamp(1.0, MAX_DIM) as u32;
+    let h = (sh * fit).round().clamp(1.0, MAX_DIM) as u32;
+    (w, h)
+}
+
+/// Map the cursor the movie requests onto an iced mouse interaction.
+fn cursor_interaction(cursor: MouseCursor) -> mouse::Interaction {
+    match cursor {
+        MouseCursor::Arrow => mouse::Interaction::Idle,
+        MouseCursor::Hand => mouse::Interaction::Pointer,
+        MouseCursor::IBeam => mouse::Interaction::Text,
+        MouseCursor::Grab => mouse::Interaction::Grab,
+    }
+}
+
 fn build(movie: ruffle_core::tag_utils::SwfMovie) -> Result<RufflePlayer, Error> {
     let stage_w = movie.width().to_pixels().ceil().max(1.0) as u32;
     let stage_h = movie.height().to_pixels().ceil().max(1.0) as u32;
@@ -239,10 +266,13 @@ fn build(movie: ruffle_core::tag_utils::SwfMovie) -> Result<RufflePlayer, Error>
     )
     .map_err(|e| Error::Renderer(e.to_string()))?;
 
+    let cursor: ui::CursorState = Arc::new(Mutex::new(MouseCursor::Arrow));
+
     let mut builder = PlayerBuilder::new()
         .with_movie(movie)
         .with_renderer(renderer)
         .with_video(SoftwareVideoBackend::new())
+        .with_ui(ui::CursorUi::new(cursor.clone()))
         .with_viewport_dimensions(stage_w, stage_h, 1.0)
         .with_autoplay(true);
 
@@ -266,6 +296,7 @@ fn build(movie: ruffle_core::tag_utils::SwfMovie) -> Result<RufflePlayer, Error>
             render: (stage_w, stage_h),
         }),
         viewport: Arc::new(Mutex::new((0.0, 0.0, 1.0))),
+        cursor,
     })
 }
 
@@ -452,6 +483,20 @@ impl<Message> shader::Program<Message> for RuffleProgram<'_> {
             _ => None,
         }
     }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        // Only reflect the movie's cursor while actually hovering the stage;
+        // outside it, let iced fall back to the default.
+        if cursor.position_in(bounds).is_none() {
+            return mouse::Interaction::default();
+        }
+        cursor_interaction(self.player.cursor())
+    }
 }
 
 fn map_button(button: mouse::Button) -> Option<MouseButton> {
@@ -474,5 +519,66 @@ where
         .width(ruffle.width)
         .height(ruffle.height)
         .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STAGE: (u32, u32) = (550, 400); // a typical 11:8 Flash stage
+
+    #[test]
+    fn fit_falls_back_to_stage_before_layout() {
+        // No on-screen size reported yet (zero view) -> native stage size.
+        assert_eq!(fit_render_size(STAGE, 0.0, 0.0, 1.0), STAGE);
+    }
+
+    #[test]
+    fn fit_scales_up_to_the_widget_at_stage_aspect() {
+        // Widget exactly the stage aspect, 2x bigger -> 2x render, aspect kept.
+        assert_eq!(fit_render_size(STAGE, 1100.0, 800.0, 1.0), (1100, 800));
+    }
+
+    #[test]
+    fn fit_is_letterboxed_by_the_tighter_axis() {
+        // A wide widget is constrained by height; width follows the stage aspect
+        // rather than filling the widget (so the shader can letterbox the sides).
+        let (w, h) = fit_render_size(STAGE, 2000.0, 800.0, 1.0);
+        assert_eq!(h, 800);
+        assert_eq!(w, 1100); // 550 * (800/400), not 2000
+    }
+
+    #[test]
+    fn fit_accounts_for_hidpi_scale() {
+        // Logical 550x400 on a 2x display -> rasterize at 1100x800.
+        assert_eq!(fit_render_size(STAGE, 550.0, 400.0, 2.0), (1100, 800));
+    }
+
+    #[test]
+    fn fit_caps_each_axis() {
+        // A huge target is capped so we never allocate/read back a giant texture.
+        let (w, h) = fit_render_size(STAGE, 100_000.0, 100_000.0, 1.0);
+        assert!(w <= 4096 && h <= 4096, "got {w}x{h}");
+    }
+
+    #[test]
+    fn cursor_maps_to_iced_interactions() {
+        assert_eq!(
+            cursor_interaction(MouseCursor::Hand),
+            mouse::Interaction::Pointer
+        );
+        assert_eq!(
+            cursor_interaction(MouseCursor::IBeam),
+            mouse::Interaction::Text
+        );
+        assert_eq!(
+            cursor_interaction(MouseCursor::Grab),
+            mouse::Interaction::Grab
+        );
+        assert_eq!(
+            cursor_interaction(MouseCursor::Arrow),
+            mouse::Interaction::Idle
+        );
     }
 }
