@@ -7,10 +7,21 @@ edition = "2021"
 iced = { version = "0.14", features = ["image", "tokio"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
-ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = ["default_font"] }
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = [
+    "default_font",
+    "audio",
+    "mp3",
+] }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
 # Software video decoder (H.263/VP6/ScreenVideo) — needed for embedded-video SWFs.
 ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Native open-file dialog.
+rfd = "0.17"
+# Real audio output (matches Ruffle's pinned cpal).
+cpal = "0.16"
+bytemuck = "1"
+thiserror = "2"
