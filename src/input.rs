@@ -4,12 +4,13 @@ use iced::{keyboard, Point, Size};
 
 use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey};
 
-/// Map a cursor position (relative to the widget) into the SWF's stage
-/// coordinate space, accounting for the `Contain` letterbox the shader applies.
-pub fn map_cursor(area: Size, stage: (u32, u32), p: Point) -> (f64, f64) {
+/// Map a cursor position (relative to the widget) into the target pixel space
+/// (`target` = the render-target size, which Ruffle's viewport lives in),
+/// accounting for the `Contain` letterbox the shader applies.
+pub fn map_cursor(area: Size, target: (u32, u32), p: Point) -> (f64, f64) {
     let area_w = area.width.max(1.0) as f64;
     let area_h = area.height.max(1.0) as f64;
-    let (sw, sh) = (stage.0 as f64, stage.1 as f64);
+    let (sw, sh) = (target.0 as f64, target.1 as f64);
     let scale = (area_w / sw).min(area_h / sh);
     let (disp_w, disp_h) = (sw * scale, sh * scale);
     let (off_x, off_y) = ((area_w - disp_w) / 2.0, (area_h - disp_h) / 2.0);

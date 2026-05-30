@@ -45,7 +45,7 @@ use iced::widget::shader::{self, Action};
 use iced::{keyboard, mouse, window, Element, Event, Length, Rectangle};
 
 use ruffle_core::events::{MouseButton, MouseWheelDelta, PlayerEvent};
-use ruffle_core::{FloatDuration, Player, PlayerBuilder};
+use ruffle_core::{FloatDuration, Player, PlayerBuilder, ViewportDimensions};
 use ruffle_render_wgpu::backend::WgpuRenderBackend;
 use ruffle_render_wgpu::target::TextureTarget;
 use ruffle_render_wgpu::wgpu;
@@ -71,6 +71,11 @@ pub struct RufflePlayer {
     stage_w: u32,
     stage_h: u32,
     shared: Mutex<Shared>,
+    /// The widget's last-known on-screen size in *physical* pixels plus the
+    /// viewport scale factor `(width, height, scale)`. Written by the shader
+    /// primitive's `prepare` (the only place that knows the real pixel size and
+    /// HiDPI scale) and read by `advance` to size the offscreen render target.
+    viewport: Arc<Mutex<(f32, f32, f32)>>,
 }
 
 struct Shared {
@@ -78,6 +83,10 @@ struct Shared {
     frame: Option<Arc<FrameData>>,
     frame_hash: u64,
     paused: bool,
+    /// Current offscreen render-target size in pixels. Starts at the native
+    /// stage size and is grown/shrunk to match the widget's on-screen size so
+    /// vectors are rasterized crisply instead of being upscaled from a raster.
+    render: (u32, u32),
 }
 
 impl RufflePlayer {
@@ -98,6 +107,14 @@ impl RufflePlayer {
     /// The movie's native stage size in pixels.
     pub fn size(&self) -> (u32, u32) {
         (self.stage_w, self.stage_h)
+    }
+
+    /// The current offscreen render-target size in pixels. This is the stage
+    /// scaled to the widget's on-screen size and is the coordinate space
+    /// Ruffle's viewport (and thus its mouse mapping) lives in — so cursor
+    /// positions must be mapped into *this* space, not the native stage size.
+    fn render_size(&self) -> (u32, u32) {
+        self.shared.lock().unwrap().render
     }
 
     /// Whether playback is paused.
@@ -126,10 +143,40 @@ impl RufflePlayer {
     /// Advance the movie by real elapsed time and capture a new frame if the
     /// rendered output changed. Called by the widget each redraw.
     fn advance(&self) {
+        let (view_w, view_h, scale) = *self.viewport.lock().unwrap();
         let mut shared = self.shared.lock().unwrap();
+        let mut player = self.player.lock().unwrap();
+
+        // Re-rasterize at the widget's on-screen resolution. Flash art is
+        // vector; rendering at the native stage size and letting iced upscale
+        // the raster is what makes the output jagged. Resizing the offscreen
+        // target to the displayed size (and rebuilding the stage matrices via
+        // `set_viewport_dimensions`) tessellates the vectors crisply at that
+        // resolution — the same trick the Ruffle desktop app uses on resize.
+        let target = self.target_render_size(view_w, view_h, scale);
+        let resized = target != shared.render;
+        if resized {
+            player.set_viewport_dimensions(ViewportDimensions {
+                width: target.0,
+                height: target.1,
+                scale_factor: scale.max(0.1) as f64,
+            });
+            shared.render = target;
+        }
+
         if shared.paused {
+            // Paused content still needs a fresh, correctly-sized frame after a
+            // resize so it doesn't stay blurry until playback resumes.
+            if resized {
+                player.render();
+                if let Some((hash, frame)) = capture(&mut player) {
+                    shared.frame_hash = hash;
+                    shared.frame = Some(Arc::new(frame));
+                }
+            }
             return;
         }
+
         let now = Instant::now();
         let dt = match shared.last_tick {
             Some(t) => FloatDuration::from_std(now.duration_since(t)),
@@ -137,9 +184,8 @@ impl RufflePlayer {
         };
         shared.last_tick = Some(now);
 
-        let mut player = self.player.lock().unwrap();
         player.tick(dt);
-        if player.needs_render() {
+        if resized || player.needs_render() {
             player.render();
             if let Some((hash, frame)) = capture(&mut player) {
                 if shared.frame_hash != hash {
@@ -148,6 +194,26 @@ impl RufflePlayer {
                 }
             }
         }
+    }
+
+    /// Size of the offscreen render target for the current on-screen size:
+    /// the stage scaled (preserving aspect ratio) to fit the widget's physical
+    /// pixels. Keeping the stage's aspect ratio means the existing shader-side
+    /// letterbox and stage-space cursor mapping stay valid — only the raster
+    /// gets sharper. Falls back to the native stage size before the widget has
+    /// reported a size, and caps each axis so a stray huge size can't allocate
+    /// (and read back) an enormous texture.
+    fn target_render_size(&self, view_w: f32, view_h: f32, scale: f32) -> (u32, u32) {
+        const MAX_DIM: f32 = 4096.0;
+        let (sw, sh) = (self.stage_w as f32, self.stage_h as f32);
+        let (pw, ph) = (view_w * scale, view_h * scale);
+        if pw < 1.0 || ph < 1.0 || sw < 1.0 || sh < 1.0 {
+            return (self.stage_w.max(1), self.stage_h.max(1));
+        }
+        let fit = (pw / sw).min(ph / sh);
+        let w = (sw * fit).round().clamp(1.0, MAX_DIM) as u32;
+        let h = (sh * fit).round().clamp(1.0, MAX_DIM) as u32;
+        (w, h)
     }
 
     /// The current frame and its content hash (the texture "version").
@@ -197,7 +263,9 @@ fn build(movie: ruffle_core::tag_utils::SwfMovie) -> Result<RufflePlayer, Error>
             frame: None,
             frame_hash: 0,
             paused: false,
+            render: (stage_w, stage_h),
         }),
+        viewport: Arc::new(Mutex::new((0.0, 0.0, 1.0))),
     })
 }
 
@@ -283,7 +351,10 @@ impl RuffleProgram<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
-        let stage = self.player.size();
+        // Map into the render-target pixel space (what Ruffle's viewport uses),
+        // not the native stage size — otherwise input is mis-scaled by the
+        // stage-to-render ratio once we render above native resolution.
+        let stage = self.player.render_size();
         let pos = cursor.position_in(bounds);
         match event {
             mouse::Event::CursorMoved { .. } => {
@@ -356,7 +427,7 @@ impl<Message> shader::Program<Message> for RuffleProgram<'_> {
 
     fn draw(&self, _state: &(), _cursor: mouse::Cursor, _bounds: Rectangle) -> FramePrimitive {
         let (version, frame) = self.player.frame();
-        FramePrimitive::new(version, frame)
+        FramePrimitive::new(version, frame, self.player.viewport.clone())
     }
 
     fn update(

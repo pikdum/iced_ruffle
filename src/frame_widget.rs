@@ -9,7 +9,7 @@
 //! finn and iced_video_player use. The frame is letterboxed (Contain) to the
 //! widget via a scale uniform, matching `map_cursor` in main.rs.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use iced::advanced::graphics::Viewport;
 use iced::wgpu;
@@ -30,11 +30,24 @@ pub struct FrameData {
 pub struct FramePrimitive {
     version: u64,
     frame: Option<Arc<FrameData>>,
+    /// Shared cell the player reads to size its offscreen render target. This
+    /// is the only place that knows the widget's real *physical* pixel size and
+    /// HiDPI scale, so `prepare` writes `(width, height, scale)` here for the
+    /// next `advance` to pick up.
+    viewport: Arc<Mutex<(f32, f32, f32)>>,
 }
 
 impl FramePrimitive {
-    pub fn new(version: u64, frame: Option<Arc<FrameData>>) -> Self {
-        Self { version, frame }
+    pub fn new(
+        version: u64,
+        frame: Option<Arc<FrameData>>,
+        viewport: Arc<Mutex<(f32, f32, f32)>>,
+    ) -> Self {
+        Self {
+            version,
+            frame,
+            viewport,
+        }
     }
 }
 
@@ -58,12 +71,19 @@ impl Primitive for FramePrimitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        let Some(frame) = &self.frame else {
-            return;
-        };
         let scale = viewport.scale_factor();
         let area_w = (bounds.width * scale).max(1.0);
         let area_h = (bounds.height * scale).max(1.0);
+
+        // Report the on-screen physical size + scale so the player can size its
+        // offscreen render target to match (sharp vectors instead of an upscaled
+        // raster). Written even before the first frame so the very first render
+        // already targets the right resolution.
+        *self.viewport.lock().unwrap() = (area_w, area_h, scale);
+
+        let Some(frame) = &self.frame else {
+            return;
+        };
         pipeline.prepare(device, queue, self.version, frame, area_w, area_h);
     }
 
