@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.14", features = ["image", "tokio"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+iced = { version = "0.14", features = ["tokio", "wgpu", "advanced"] }
+image = { version = "0.25", default-features = false }
 
 ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = [
     "default_font",

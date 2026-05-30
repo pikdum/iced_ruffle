@@ -21,6 +21,7 @@
 //!     stage space for input.
 
 mod audio;
+mod frame_widget;
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
@@ -29,12 +30,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use iced::widget::image::{FilterMethod, Handle};
-use iced::widget::{button, column, container, image, mouse_area, row, text};
+use iced::widget::{button, column, container, mouse_area, row, shader, text};
 use iced::{
-    keyboard, mouse, time, window, Center, Color, ContentFit, Element, Length, Size, Subscription,
-    Task,
+    keyboard, mouse, time, window, Center, Color, Element, Length, Size, Subscription, Task,
 };
+
+use frame_widget::{FrameData, FrameProgram};
 
 use ruffle_core::events::{
     KeyDescriptor, KeyLocation, LogicalKey, MouseButton, MouseWheelDelta, NamedKey, PhysicalKey,
@@ -56,12 +57,11 @@ struct Session {
     stage_w: u32,
     stage_h: u32,
     last_tick: Instant,
-    frame: Option<Handle>,
-    /// Hash of the last displayed frame. Ruffle reports `needs_render` on nearly
-    /// every tick even when the pixels are identical (e.g. a static movie), so we
-    /// only hand iced a new texture when the content actually changed — otherwise
-    /// re-uploading the bitmap every frame flickers.
-    last_hash: Option<u64>,
+    /// Latest rendered frame (RGBA), shared with the shader widget.
+    frame: Option<Arc<FrameData>>,
+    /// Content hash of `frame`, used both to skip redundant work here and as the
+    /// shader widget's texture "version" so the GPU upload only happens on change.
+    frame_hash: u64,
 }
 
 struct App {
@@ -147,21 +147,28 @@ fn load_session(path: impl AsRef<Path>) -> Result<Session, String> {
         stage_h,
         last_tick: Instant::now(),
         frame: None,
-        last_hash: None,
+        frame_hash: 0,
     })
 }
 
-/// Pull the freshly rendered frame out of the offscreen backend as an iced image,
+/// Pull the freshly rendered frame out of the offscreen backend as raw RGBA,
 /// along with a hash of its pixels (for change detection).
-fn capture(player: &mut Player) -> Option<(u64, Handle)> {
+fn capture(player: &mut Player) -> Option<(u64, FrameData)> {
     let renderer =
         <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut());
     let rgba = renderer?.capture_frame()?;
-    let (w, h) = (rgba.width(), rgba.height());
-    let raw = rgba.into_raw();
+    let (width, height) = (rgba.width(), rgba.height());
+    let data = rgba.into_raw();
     let mut hasher = DefaultHasher::new();
-    raw.hash(&mut hasher);
-    Some((hasher.finish(), Handle::from_rgba(w, h, raw)))
+    data.hash(&mut hasher);
+    Some((
+        hasher.finish(),
+        FrameData {
+            width,
+            height,
+            data,
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -333,16 +340,16 @@ impl App {
                     let mut updated = None;
                     if player.needs_render() {
                         player.render();
-                        if let Some((hash, handle)) = capture(&mut player) {
-                            if s.last_hash != Some(hash) {
-                                updated = Some((hash, handle));
+                        if let Some((hash, frame)) = capture(&mut player) {
+                            if s.frame_hash != hash {
+                                updated = Some((hash, frame));
                             }
                         }
                     }
                     drop(player);
-                    if let Some((hash, handle)) = updated {
-                        s.last_hash = Some(hash);
-                        s.frame = Some(handle);
+                    if let Some((hash, frame)) = updated {
+                        s.frame_hash = hash;
+                        s.frame = Some(Arc::new(frame));
                     }
                 }
             }
@@ -462,15 +469,15 @@ impl App {
         .height(Length::Fixed(TOOLBAR_H))
         .padding([6, 10]);
 
-        let stage: Element<'_, Message> = match self.session.as_ref().and_then(|s| s.frame.clone())
-        {
-            Some(handle) => image(handle)
-                .content_fit(ContentFit::Contain)
-                .filter_method(FilterMethod::Linear)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => text("No movie loaded").into(),
+        let stage: Element<'_, Message> = match self.session.as_ref() {
+            Some(s) if s.frame.is_some() => shader(FrameProgram {
+                version: s.frame_hash,
+                frame: s.frame.clone().unwrap(),
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+            _ => text("No movie loaded").into(),
         };
 
         let player_area = mouse_area(
