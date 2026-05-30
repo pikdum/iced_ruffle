@@ -46,7 +46,12 @@ in
   env.LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
 
   git-hooks.hooks = {
-    clippy.enable = true;
+    clippy = {
+      enable = true;
+      # Check all targets (incl. the example), not just the lib, and fail on warnings.
+      settings.extraArgs = "--all-targets";
+      settings.denyWarnings = true;
+    };
     rustfmt.enable = true;
     nixfmt.enable = true;
     actionlint.enable = true;
