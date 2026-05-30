@@ -81,6 +81,15 @@ impl Primitive for FramePrimitive {
         // already targets the right resolution.
         *self.viewport.lock().unwrap() = (area_w, area_h, scale);
 
+        // Remember the widget's full physical bounds so `render` can map the
+        // quad to them and merely *clip* (scissor) to the visible region —
+        // rather than squishing the whole frame into the clipped sub-rect when
+        // the widget is partially scrolled off screen. `clip_bounds` (the only
+        // thing `render` receives) is that visible intersection, so the full
+        // bounds have to be carried across from here. Mirrors what iced's own
+        // shader draw path does (`instance.bounds * scale` for the viewport).
+        pipeline.bounds = *bounds * scale;
+
         let Some(frame) = &self.frame else {
             return;
         };
@@ -113,6 +122,10 @@ pub struct FramePipeline {
     /// straight through. Mismatching these is what tints the output (linear
     /// values shown as sRGB look too dark/oversaturated).
     tex_format: wgpu::TextureFormat,
+    /// The widget's full bounds in *physical* pixels, set each `prepare`. Used
+    /// as the render-pass viewport so the frame is positioned/sized to the whole
+    /// widget and the scissor (clip bounds) just trims the off-screen part.
+    bounds: Rectangle,
     target: Option<Target>,
 }
 
@@ -216,6 +229,12 @@ impl shader::Pipeline for FramePipeline {
             sampler,
             layout,
             tex_format,
+            bounds: Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
             target: None,
         }
     }
@@ -353,11 +372,15 @@ impl FramePipeline {
             occlusion_query_set: None,
         });
 
+        // Viewport = the full widget bounds (the quad is laid out against these),
+        // scissor = the visible clip region. Sizing the viewport to `clip_bounds`
+        // instead would squeeze the whole frame into the visible strip as the
+        // widget scrolls off screen, rather than letting it slide out of view.
         pass.set_viewport(
-            clip_bounds.x as f32,
-            clip_bounds.y as f32,
-            clip_bounds.width as f32,
-            clip_bounds.height as f32,
+            self.bounds.x,
+            self.bounds.y,
+            self.bounds.width,
+            self.bounds.height,
             0.0,
             1.0,
         );
