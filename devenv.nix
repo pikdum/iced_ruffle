@@ -7,7 +7,8 @@
 }:
 
 let
-  # Native libs winit (Wayland/X11) + wgpu (Vulkan/GL) dlopen at runtime.
+  # Native libs winit (Wayland/X11) + wgpu (Vulkan/GL) dlopen at runtime, plus
+  # dbus for rfd's native file-dialog portal.
   runtimeLibs = with pkgs; [
     vulkan-loader
     wayland
@@ -17,6 +18,7 @@ let
     libxcursor
     libxi
     libxrandr
+    dbus
   ];
 in
 {
@@ -28,6 +30,9 @@ in
     # cpal's alsa-sys needs ALSA headers + pkg-config to build the audio backend.
     pkgs.pkg-config
     pkgs.alsa-lib
+    # rfd's file dialog: native portal needs a running xdg-desktop-portal; zenity
+    # is rfd's reliable fallback when no portal is available.
+    pkgs.zenity
   ];
 
   languages.rust = {
