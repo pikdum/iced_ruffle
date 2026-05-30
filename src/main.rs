@@ -23,6 +23,8 @@
 mod audio;
 
 use std::any::Any;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -55,6 +57,11 @@ struct Session {
     stage_h: u32,
     last_tick: Instant,
     frame: Option<Handle>,
+    /// Hash of the last displayed frame. Ruffle reports `needs_render` on nearly
+    /// every tick even when the pixels are identical (e.g. a static movie), so we
+    /// only hand iced a new texture when the content actually changed — otherwise
+    /// re-uploading the bitmap every frame flickers.
+    last_hash: Option<u64>,
 }
 
 struct App {
@@ -140,16 +147,21 @@ fn load_session(path: impl AsRef<Path>) -> Result<Session, String> {
         stage_h,
         last_tick: Instant::now(),
         frame: None,
+        last_hash: None,
     })
 }
 
-/// Pull the freshly rendered frame out of the offscreen backend as an iced image.
-fn capture(player: &mut Player) -> Option<Handle> {
+/// Pull the freshly rendered frame out of the offscreen backend as an iced image,
+/// along with a hash of its pixels (for change detection).
+fn capture(player: &mut Player) -> Option<(u64, Handle)> {
     let renderer =
         <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut());
     let rgba = renderer?.capture_frame()?;
     let (w, h) = (rgba.width(), rgba.height());
-    Some(Handle::from_rgba(w, h, rgba.into_raw()))
+    let raw = rgba.into_raw();
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    Some((hasher.finish(), Handle::from_rgba(w, h, raw)))
 }
 
 // ---------------------------------------------------------------------------
@@ -318,12 +330,19 @@ impl App {
                     s.last_tick = now;
                     let mut player = s.player.lock().unwrap();
                     player.tick(dt);
+                    let mut updated = None;
                     if player.needs_render() {
                         player.render();
-                        if let Some(handle) = capture(&mut player) {
-                            drop(player);
-                            s.frame = Some(handle);
+                        if let Some((hash, handle)) = capture(&mut player) {
+                            if s.last_hash != Some(hash) {
+                                updated = Some((hash, handle));
+                            }
                         }
+                    }
+                    drop(player);
+                    if let Some((hash, handle)) = updated {
+                        s.last_hash = Some(hash);
+                        s.frame = Some(handle);
                     }
                 }
             }
