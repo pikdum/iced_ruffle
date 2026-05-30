@@ -1,0 +1,16 @@
+[package]
+name = "iced-ruffle-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.14", features = ["image", "tokio"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = ["default_font"] }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+# Software video decoder (H.263/VP6/ScreenVideo) — needed for embedded-video SWFs.
+ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
