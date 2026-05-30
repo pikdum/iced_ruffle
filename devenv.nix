@@ -49,5 +49,6 @@ in
     clippy.enable = true;
     rustfmt.enable = true;
     nixfmt.enable = true;
+    actionlint.enable = true;
   };
 }
