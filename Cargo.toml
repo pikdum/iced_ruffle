@@ -13,14 +13,19 @@ path = "src/lib.rs"
 iced = { version = "0.14", features = ["wgpu", "advanced"] }
 image = { version = "0.25", default-features = false }
 
-ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = [
+# Pinned by rev (not branch) so a single Ruffle source identity is reproducible:
+# it lets a downstream `[patch.crates-io] swf = { git=ruffle, rev=… }` unify the
+# duplicate `swf` (crates.io via Ruffle's build-time rascal + Ruffle's own git
+# swf) into one rev-pinned source — required for offline nix vendoring. A branch
+# patch can't resolve against an offline vendor; a rev patch needs a rev source.
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", rev = "5d1d2134e0254ab9bbc3de231fe0015c37eff9cb", features = [
     "default_font",
     "audio",
     "mp3",
 ] }
-ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", rev = "5d1d2134e0254ab9bbc3de231fe0015c37eff9cb" }
 # Software video decoder (H.263/VP6/ScreenVideo) — needed for embedded-video SWFs.
-ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+ruffle_video_software = { git = "https://github.com/ruffle-rs/ruffle", rev = "5d1d2134e0254ab9bbc3de231fe0015c37eff9cb" }
 
 tracing = "0.1"
 # Real audio output (matches Ruffle's pinned cpal).
